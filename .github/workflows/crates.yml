@@ -13,4 +13,6 @@ jobs:
         uses: projg2/crate-dist-mirror-action@v2
         with:
           ssh-private-key: ${{ secrets.ssh_key }}
+          # upstream also tags every workspace package; only the CLI releases matter
+          tag-filter: 'v[0-9]*'
           directories: pnpm/crates/cli
