@@ -1,0 +1,66 @@
+name: Bundle cas-loader
+run-name: ${{ inputs.tag || 'latest release' }}
+on:
+  schedule:
+    # after the hourly mirror in crates.yml has created the release
+    - cron: "42 * * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to bundle for (e.g. v12.10.1)'
+        required: true
+
+jobs:
+  cas-loader:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # pnpm-deps-restorer include_str!s this esbuild bundle, which upstream
+      # generates at install time and never publishes.
+      - name: Pick the release
+        id: rel
+        run: |
+          tag="${{ inputs.tag }}"
+          [ -n "$tag" ] || tag=$(gh release view -R "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          asset="pnpm-${tag#v}-cas-loader.mjs.inc"
+          if gh release view "$tag" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -qxF "$asset"; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v6
+        if: steps.rel.outputs.skip != 'true'
+        with:
+          repository: pnpm/pnpm
+          ref: ${{ steps.rel.outputs.tag }}
+
+      - name: Check the release needs it
+        id: need
+        if: steps.rel.outputs.skip != 'true'
+        run: |
+          [ -f pnpm/esm-loader/scripts/bundle-runtime.mjs ] || echo "skip=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v6
+        if: steps.rel.outputs.skip != 'true' && steps.need.outputs.skip != 'true'
+        with:
+          node-version: '26'
+
+      - uses: pnpm/action-setup@v6
+        if: steps.rel.outputs.skip != 'true' && steps.need.outputs.skip != 'true'
+        with:
+          run_install: false
+
+      - name: Bundle
+        if: steps.rel.outputs.skip != 'true' && steps.need.outputs.skip != 'true'
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts --filter '@pnpm/esm-loader...'
+          node pnpm/esm-loader/scripts/bundle-runtime.mjs
+          cp pnpm/crates/deps-restorer/src/cas-loader.mjs.inc "${{ steps.rel.outputs.asset }}"
+
+      - name: Upload to release
+        if: steps.rel.outputs.skip != 'true' && steps.need.outputs.skip != 'true'
+        run: gh release upload "${{ steps.rel.outputs.tag }}" "${{ steps.rel.outputs.asset }}" -R "$GITHUB_REPOSITORY"
