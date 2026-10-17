@@ -1,9 +1,13 @@
 name: Bundle cas-loader
-run-name: ${{ inputs.tag || 'latest release' }}
+run-name: ${{ inputs.tag || github.event.workflow_run.head_branch || 'latest release' }}
 on:
   schedule:
     # after the hourly mirror in crates.yml has created the release
     - cron: "42 * * * *"
+  # fork schedules can stop for days; follow the tag's crate dist directly
+  workflow_run:
+    workflows: [Create crate dist]
+    types: [completed]
   workflow_dispatch:
     inputs:
       tag:
@@ -12,6 +16,7 @@ on:
 
 jobs:
   cas-loader:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -22,8 +27,10 @@ jobs:
       # generates at install time and never publishes.
       - name: Pick the release
         id: rel
+        env:
+          TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
         run: |
-          tag="${{ inputs.tag }}"
+          tag=$TAG
           [ -n "$tag" ] || tag=$(gh release view -R "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
           asset="pnpm-${tag#v}-cas-loader.mjs.inc"
           if gh release view "$tag" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -qxF "$asset"; then
